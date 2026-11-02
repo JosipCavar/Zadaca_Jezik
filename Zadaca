@@ -1,4 +1,24 @@
 # coding=utf8
+"""
+Obrada teksta + povezivanje s Ollamom.
+
+Prije pokretanja:
+    1. Instalirajte Ollamu (ollama.com) i pokrenite je (ollama serve)
+    2. ollama pull llama3.1
+    3. pip install ollama
+"""
+
+import copy
+
+import ollama
+
+MODEL = 'llama3.1'          # promijenite po želji (npr. 'qwen2.5', 'llama3.2')
+FILENAME = 'alan_ford_001_grupa_tnt.txt'
+
+
+# ======================================================================
+# FUNKCIJE ZA OBRADU TEKSTA
+# ======================================================================
 
 def read_file(filename):
     """
@@ -7,7 +27,9 @@ def read_file(filename):
     izlaz:
     -tekst iz datoteke
     """
-    return open(filename, 'r', encoding = 'utf8').read()
+    with open(filename, 'r', encoding='utf8') as f:
+        return f.read()
+
 
 def len_file(filename):
     """
@@ -17,6 +39,7 @@ def len_file(filename):
     -broj znakova u datoteci
     """
     return len(read_file(filename))
+
 
 def count_chars(txt, chars):
     """
@@ -31,18 +54,20 @@ def count_chars(txt, chars):
     """
     return sum(1 for c in txt if c in chars)
 
+
 def count_subtext(txt, subtxt):
     """
     ulaz:
     -txt: tekst
-    -subtxt: podteks
+    -subtxt: podtekst
     izlaz:
-    -ukupan broj pojavljivanje podteksta u tekstu
+    -ukupan broj pojavljivanja podteksta u tekstu
 
     Primjer: u tekstu "Upravo sada kad sam konačno našao mušteriju!"
-    podtekst "na" se javlja 3 puta.
+    podtekst "na" se javlja 2 puta.
     """
     return len(pos_subtext(txt, subtxt))
+
 
 def pos_subtext(txt, subtxt):
     """
@@ -52,8 +77,8 @@ def pos_subtext(txt, subtxt):
     izlaz:
     -sortirana lista pozicija podteksta u tekstu
 
-    Primjer: U tekstu "Upravo sada kad sam konačno našao mušteriju!"
-    podtekst "na" se nalazi na pozicijama
+    Primjer: u tekstu "Upravo sada kad sam konačno našao mušteriju!"
+    podtekst "na" se nalazi na pozicijama [22, 28].
     """
     positions = []
     pos = txt.find(subtxt)
@@ -62,18 +87,20 @@ def pos_subtext(txt, subtxt):
         pos = txt.find(subtxt, pos + 1)
     return positions
 
+
 def sep_text(txt, sep):
     """
     ulaz:
     -txt: tekst
     -sep: znak separatora
     izlaz:
-    -lista svih podtekstova iz teksta koji se nalaze između 2 separatora
+    -lista svih podtekstova koji se nalaze između 2 separatora
 
-    Primjer: za tekst "aaaXbbXcccXdXX" i znak separatora "X" rezultirajuća 
-    lista je ['bb', 'ccc', 'd', '']
+    Primjer: za tekst "aaaXbbXcccXdXX" i separator "X" rezultat
+    je ['bb', 'ccc', 'd', '']
     """
     return split_text(txt, sep)[1:-1]
+
 
 def split_text(txt, sep):
     """
@@ -81,32 +108,105 @@ def split_text(txt, sep):
     -txt: tekst
     -sep: znak separatora
     izlaz:
-    -lista svih podtekstova iz teksta koji se nalaze između 2 separatora 
-    ili između separatora i početka ili kraja teksta
+    -lista svih podtekstova između 2 separatora ili između separatora
+    i početka/kraja teksta
 
-    Primjer: za tekst "aaaXbbXcccXdXX" i znak separatora "X" rezultirajuća 
-    lista je ['aaa', 'bb', 'ccc', 'd', '', '']
+    Primjer: za tekst "aaaXbbXcccXdXX" i separator "X" rezultat
+    je ['aaa', 'bb', 'ccc', 'd', '', '']
     """
     parts = []
-    current = ''
+    current = []
     for c in txt:
         if c == sep:
-            parts.append(current)
-            current = ''
+            parts.append(''.join(current))
+            current = []
         else:
-            current += c
-    parts.append(current)
+            current.append(c)
+    parts.append(''.join(current))
     return parts
 
 
-# TEST FUNKCIJE ********************************************************************
+# ======================================================================
+# OLLAMA
+# ======================================================================
+
+def ask_ollama(prompt, model=MODEL, num_ctx=8192):
+    """
+    ulaz:
+    -prompt: pitanje/zadatak za model
+    -model: naziv Ollama modela
+    -num_ctx: veličina konteksta (zadana u Ollami je premala za duge tekstove)
+    izlaz:
+    -odgovor modela kao tekst
+    """
+    try:
+        response = ollama.chat(
+            model=model,
+            messages=[{'role': 'user', 'content': prompt}],
+            options={'num_ctx': num_ctx},
+        )
+        return response['message']['content']
+    except Exception as e:
+        return ('Greška pri spajanju na Ollamu: %s\n'
+                'Provjerite radi li Ollama (ollama serve) i je li model '
+                'skinut (ollama pull %s).' % (e, model))
+
+
+def make_chunks(txt, size=4000):
+    """Dijeli tekst na dijelove od najviše `size` znakova."""
+    return [txt[i:i + size] for i in range(0, len(txt), size)]
+
+
+def summarize_text(txt, chunk_size=4000):
+    """
+    Sažima dugačak tekst: prvo svaki dio posebno, pa sažetke spoji u jedan.
+    """
+    summaries = []
+    for i, part in enumerate(make_chunks(txt, chunk_size), 1):
+        print('Sažimam dio %d...' % i)
+        summaries.append(ask_ollama(
+            'Sažmi sljedeći dio stripa u 3-4 rečenice na hrvatskom:\n\n' + part))
+    return ask_ollama(
+        'Spoji ove djelomične sažetke u jedan sažetak od 5 rečenica '
+        'na hrvatskom:\n\n' + '\n\n'.join(summaries))
+
+
+def ask_about_text(txt, question):
+    """Postavlja pitanje o tekstu (cijeli tekst ide u kontekst)."""
+    prompt = ('Na temelju sljedećeg teksta odgovori na pitanje na hrvatskom.\n\n'
+              'TEKST:\n%s\n\nPITANJE: %s' % (txt, question))
+    return ask_ollama(prompt, num_ctx=16384)
+
+
+def ask_about_keyword(txt, keyword, question, radius=500):
+    """
+    Koristi pos_subtext da pronađe sva mjesta gdje se javlja `keyword`,
+    izvuče okolni tekst i pošalje samo to modelu.
+    """
+    positions = pos_subtext(txt, keyword)
+    if not positions:
+        return 'Riječ "%s" se ne pojavljuje u tekstu.' % keyword
+    snippets = []
+    for p in positions:
+        start = max(0, p - radius)
+        end = min(len(txt), p + len(keyword) + radius)
+        snippets.append('...' + txt[start:end] + '...')
+    prompt = ('Evo ulomaka iz stripa koji sadrže "%s":\n\n%s\n\nPITANJE: %s\n'
+              'Odgovori na hrvatskom.' % (keyword, '\n\n'.join(snippets), question))
+    return ask_ollama(prompt)
+
+
+# ======================================================================
+# TESTOVI
+# ======================================================================
 
 def testname(func):
     print()
     print(func.__name__.upper())
-    print('-'*60)
+    print('-' * 60)
 
-def test(func, input, output = None):
+
+def test(func, input, output=None):
     def reformat(data):
         maxlen = 80
         if type(data) is str:
@@ -117,41 +217,63 @@ def test(func, input, output = None):
         if isinstance(data, dict):
             return type(data)((k, reformat(v)) for k, v in data.items())
         return data
-    
-    import copy
+
     input_copy = copy.deepcopy(input)
     result = func(*input)
 
     success = 'OK' if result == output else 'X'
-    print('%s\t%s%s ==> %s == %s' % (success, func.__name__, reformat(input_copy), reformat(output), (result)))
+    print('%s\t%s%s ==> %s == %s' % (
+        success, func.__name__, reformat(input_copy), reformat(output), reformat(result)))
 
-# TESTOVI **************************************************************************
 
-FILENAME = 'alan_ford_001_grupa_tnt.txt'
+def run_tests():
+    testname(len_file)
+    test(len_file, (FILENAME,), 19301)
 
-testname(len_file)
-test(len_file, (FILENAME, ), 19301)
+    testname(count_chars)
+    test(count_chars, input=('Upravo sada kad sam konačno našao mušteriju!', ['a', 'k', 't']), output=11)
+    test(count_chars, input=('Upravo sada kad sam konačno našao mušteriju!', ['u', 'U']), output=3)
+    test(count_chars, input=(read_file(FILENAME), ['a', 'k', 't']), output=2939)
 
-testname(count_chars)
-test(count_chars, input=('Upravo sada kad sam konačno našao mušteriju!', ['a','k','t']), output=11)
-test(count_chars, input=('Upravo sada kad sam konačno našao mušteriju!', ['u','U']), output=3)
-test(count_chars, input=(read_file(FILENAME), ['a','k','t']), output=2939)
+    testname(pos_subtext)
+    test(pos_subtext, input=('Upravo sada kad sam konačno našao mušteriju!', 'na'), output=[22, 28])
+    test(pos_subtext, input=('Bananarama je svakog dana sama', 'ana'), output=[1, 3, 22])
+    test(pos_subtext, input=(read_file(FILENAME), 'New York'), output=[29, 12946, 16002])
 
-testname(pos_subtext)
-test(pos_subtext, input=('Upravo sada kad sam konačno našao mušteriju!', 'na'), output=[22, 28])
-test(pos_subtext, input=('Bananarama je svakog dana sama', 'ana'), output=[1, 3, 22])
-test(pos_subtext, input=(read_file(FILENAME), 'New York'), output= [29, 12946, 16002])
+    testname(sep_text)
+    test(sep_text, input=('aaaXbbXcccXdXX', 'X'), output=['bb', 'ccc', 'd', ''])
+    test(sep_text,
+         input=('Da čujemo što mladac zna! Prokleta lopužo! Ili sviraj ili vrati novac!', ' '),
+         output=['čujemo', 'što', 'mladac', 'zna!', 'Prokleta', 'lopužo!', 'Ili', 'sviraj', 'ili', 'vrati'])
 
-testname(sep_text)
-test(sep_text, input=('aaaXbbXcccXdXX', 'X'), output = ['bb', 'ccc', 'd', ''])
-test(sep_text, input=('Da čujemo što mladac zna! Prokleta lopužo! Ili sviraj ili vrati novac!', ' '), output = ['čujemo', 'što', 'mladac', 'zna!', 'Prokleta', 'lopužo!', 'Ili', 'sviraj', 'ili', 'vrati'])
+    testname(split_text)
+    test(split_text, input=('aaaXbbXcccXdXX', 'X'), output=['aaa', 'bb', 'ccc', 'd', '', ''])
+    test(split_text,
+         input=('Da čujemo što mladac zna! Prokleta lopužo! Ili sviraj ili vrati novac!', ' '),
+         output=['Da', 'čujemo', 'što', 'mladac', 'zna!', 'Prokleta', 'lopužo!', 'Ili', 'sviraj', 'ili', 'vrati', 'novac!'])
 
-testname(split_text)
-test(split_text, input=('aaaXbbXcccXdXX', 'X'), output = ['aaa', 'bb', 'ccc', 'd', '', ''])
-test(split_text, input=('Da čujemo što mladac zna! Prokleta lopužo! Ili sviraj ili vrati novac!', ' '), output = ['Da', 'čujemo', 'što', 'mladac', 'zna!', 'Prokleta', 'lopužo!', 'Ili', 'sviraj', 'ili', 'vrati', 'novac!'])
 
-#1. Korak
-print("------------------------------")
-FILE = read_file(FILENAME)
-print(FILE[:100])
-print("------------------------------")
+# ======================================================================
+# GLAVNI PROGRAM
+# ======================================================================
+
+if __name__ == '__main__':
+    # 1. Korak: učitaj datoteku
+    print('-' * 30)
+    FILE = read_file(FILENAME)
+    print(FILE[:100])
+    print('-' * 30)
+
+    # Testovi (isključite ako ne trebaju)
+    run_tests()
+
+    # 2. Korak: Ollama
+    print('\n' + '=' * 60)
+    print('OLLAMA (%s)' % MODEL)
+    print('=' * 60)
+
+    print('\nSažetak:')
+    print(summarize_text(FILE))
+
+    print('\nPitanje o riječi "New York":')
+    print(ask_about_keyword(FILE, 'New York', 'Što se događa u ovim ulomcima?'))
